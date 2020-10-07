@@ -3,6 +3,9 @@ title: "Heart Failure analysis and modeling - code and outputs"
 author: "Alexander Kheirallah"
 date: "07/10/2020"
 output:
+  pdf_document: 
+    fig_height: 4
+    fig_width: 7
   html_document:
     df_print: paged
     fig_caption: no

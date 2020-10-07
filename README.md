@@ -24,7 +24,8 @@ I'm suggesting a manual install of packages, like described above, because conda
 
 ## Repo structure
 - `code.html`: _Heart Failure analysis and modeling - code and outputs_ HTML file
-- `code.Rmd`: Rmd file used to generate `code.html`
+- `code.pdf`: _Heart Failure analysis and modeling - code and outputs_ PDF file
+- `code.Rmd`: Rmd file used to generate `code.html` and `code.pdf`
 - __data__ folder: contains data file (data only seen locally)
 - `README.md`: this README page
 - `report.pdf`: _Heart Failure analysis and modeling - report_ PDF report
