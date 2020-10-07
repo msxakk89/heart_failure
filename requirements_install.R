@@ -1,0 +1,12 @@
+install.packages("here")
+install.packages("tidyverse")
+install.packages("xgboost")
+installed.packages("ggplot2")
+install.packages("pROC")
+# install.packages("fastDummies")
+# install.packages("epiR")
+# install.packages("corrplot")
+# install.packages("caret")
+# install.packages("e1071")
+
+# install.packages("caroline")

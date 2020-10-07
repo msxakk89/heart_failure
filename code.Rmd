@@ -1,0 +1,208 @@
+---
+title: "Heart Failure analysis and modeling - code and outputs"
+author: "Alexander Kheirallah"
+date: "07/10/2020"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: no
+    fig_height: 4
+    fig_width: 7
+---
+
+```{r setup, include=FALSE}
+library(here)
+source(here("requirements.R"))
+```
+
+This HTML file is accompanied by explanatory `README` as well as `report.pdf` both hosted on [this](https://github.com/msxakk89/heart_failure) repository. Below you can find the _code_ and _comment_ sections. In the _comment_ section I elaborate in more detail about the analysis and choice of specific approaches.
+
+# Code section
+## Data processing 
+
+### Data formatting and value modifications
+```{r ch1, message = FALSE , warning=FALSE}
+d = read.table(here("data","processed.cleveland.data"),sep = ",",stringsAsFactors = F)
+features = c("age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal")
+names(d) = c(features,"Y")
+d$ca = as.numeric(d$ca)
+d$thal = as.numeric(d$thal)
+d$slope[d$slope==3]=1
+d$slope[d$slope==1]=3
+d$thal[d$thal==3]=1
+d$thal[d$thal==7]=2
+d$thal[d$thal==6]=3
+d$cp = as.factor(d$cp)
+d$restecg = as.factor(d$restecg)
+```
+
+### Checking what variables have missing data
+
+```{r }
+colSums(is.na(d))
+```
+
+### Removing rows with at least one NA and checking the size of resulting table
+
+```{r }
+keep = !(is.na(d$ca) | is.na(d$thal))
+d = d[keep,]
+dim(d)
+```
+
+### Converting outcome to a binary label and checking relative proportions of diseased and healthy individuals
+
+```{r }
+d = d %>%
+  mutate(Y=Y>0)
+table(d$Y)
+```
+
+## Plotting data distributions
+
+```{r fig, fig.show="hold", out.width="50%",message = FALSE}
+
+for(f in features[-match(c("cp","restecg"),features)]){
+  print(d %>%
+    ggplot(aes_string(x = f)) +geom_histogram())
+}
+```
+
+## Calculating feature importance
+
+```{r }
+X = d[,features]
+Y = d[,"Y"]
+parameters = list(booster = "gbtree",
+                  objective = "binary:logistic")
+
+xgb = xgboost(data = data.matrix(X),
+              label = Y,
+              nrounds = 1000,
+              verbose = F,
+              params = parameters)
+
+importance_matrix = xgb.importance(model = xgb,feature_names = features)
+xgb.plot.importance(importance_matrix[1:nrow(importance_matrix),])
+```
+
+## Undertaking the iterative model evaluation procedure with plotting of AUC values for both train and test partitions
+
+```{r ch,message = FALSE}
+allFeatures_ordered = importance_matrix$Feature
+
+splits = train_test_split(d = d,train_size = 0.6,seed = 123)
+train = splits$train
+test = splits$test
+
+act_train = train$Y
+act_test = test$Y
+
+RUCs_train = c()
+RUCs_test = c()
+
+x = allFeatures_ordered[1]
+form = paste("Y ~",x)
+fit = glm(form, data = train, family = "binomial") 
+
+train_pred = predict(fit,newdata = train,type = "response")
+roc_train = roc(response = act_train,predictor = train_pred,plot=F)
+RUCs_train = c(RUCs_train,roc_train$auc)
+
+test_pred = predict(fit,newdata = test,type = "response")
+roc_test = roc(response = act_test,predictor = test_pred,plot=F)
+RUCs_test = c(RUCs_test,roc_test$auc)
+
+for (i in 2:length(allFeatures_ordered)) {
+  f = allFeatures_ordered[i]
+  # update feature space
+  x = paste(x,"+",f)
+  form = paste("Y ~",x)
+  fit = glm(form, data = train, family = "binomial")
+  
+  train_pred = predict(fit,newdata = train,type = "response")
+  roc_train = roc(response = act_train,predictor = train_pred,plot=F)
+  RUCs_train = c(RUCs_train,roc_train$auc)
+  
+  test_pred = predict(fit,newdata = test,type = "response")
+  roc_test = roc(response = act_test,predictor = test_pred,plot=F)
+  RUCs_test = c(RUCs_test,roc_test$auc)
+}
+```
+
+```{r }
+RUCs_train_d = as.data.frame(cbind(num=1:length(RUCs_train),ruc=RUCs_train))
+ggplot(RUCs_train_d, aes(x=num, y=ruc)) + geom_point() + geom_line()
+```
+
+
+```{r }
+RUCs_test_d = as.data.frame(cbind(num=1:length(RUCs_test),ruc=RUCs_test))
+ggplot(RUCs_test_d, aes(x=num, y=ruc)) + geom_point() + geom_line()
+
+```
+
+## Plotting the ROC curve with 4 most important features included
+
+### With seed 123 (same as in model evaluation procedure)
+
+```{r }
+fit = glm(Y ~ thal + cp + ca + age, data = train, family = "binomial")
+train_pred = predict(fit,newdata = train,type = "response")
+test_pred = predict(fit,newdata = test,type = "response")
+
+par(pty="s")
+# train
+roc(response = act_train,predictor = train_pred,
+    plot=T, legacy.axes=T, percent=T, xlab = "False Positive %", ylab = "True Positive %", col="blue",print.auc=T)
+# test
+roc(response = act_test,predictor = test_pred,
+    percent=T, col="red", lwd=1, print.auc=T, add=T, print.auc.y=40, plot = T)
+legend("bottomright",c("train","test"),fill=c("blue","red"))
+```
+
+### With a new seed to test what happens with test's AUC as a result of this change
+
+```{r }
+splits = train_test_split(d = d,train_size = 0.6,seed = 567)
+train = splits$train
+test = splits$test
+
+act_train = train$Y
+act_test = test$Y
+
+fit = glm(Y ~ thal + cp + ca + age, data = train, family = "binomial")
+train_pred = predict(fit,newdata = train,type = "response")
+test_pred = predict(fit,newdata = test,type = "response")
+
+par(pty="s")
+# train
+roc(response = act_train,predictor = train_pred,
+    plot=T, legacy.axes=T, percent=T, xlab = "False Positive %", ylab = "True Positive %", col="blue",print.auc=T)
+# test
+roc(response = act_test,predictor = test_pred,
+    percent=T, col="red", lwd=1, print.auc=T, add=T, print.auc.y=40, plot = T)
+legend("bottomright",c("train","test"),fill=c("blue","red"))
+```
+
+## Underataking statistical analysis of logistic regression coefficients to identify features correlated with desease status
+
+```{r , warning=FALSE,message = FALSE,echo=FALSE}
+fit = glm(Y ~ ., data = d, family = "binomial")
+summary(fit)
+```
+
+# Comment section
+## Comment on data and its initial modification
+Supplied data consists of 303-by-14 table. Luckily only 4 and 2 fields are missing `NA`s in `ca` and `thal` respectivelly. It is not a lot, so removing rows with at least one `NA` is OK as we're not getting rid of much data. 
+
+The outcome label that will be modelled is in column 14th and consists of discrete integers between `0` and `4`, presumably indicating the severity of angiographic disease vessels narrowing. However the task will be simplified by treating and value greater than `0` as `1` yielding as a binary classification challenge. Luckily we're not having to deal with severe class imbalance problem as 46% of data has a positive disease status (i.e. roughly equal amounts of diseased and healthy individuals). 
+
+Features consist of combination of binary, categorical and ordinal and continous numeric variables. Categorical features ought to be treated with caution as they are valued by whole integers and hence can be confused to have inherent numerical ordering. There are two categorical variables, `cp` and `restecg`. It will be important, especially from statistical learning point of view, to encode them as R environment factors which has been done. Moreover, it is advisable to slightly modify the ordinal features `slope` and `thal` (for the former by exchanging `1` by `3` and vice versa, while for latter by by exchanging `3` for `0`, `6` for `2` and `7` for `1`). This is because for `slope`, value `1` represents _up_ and `3` represents _down_ and it makes more sense to have the feature in ascending order. For `thal` numbers represent "fixation level" of defect and hence have inherent ordering but value `7` represents "reversiable defect", while `6` "fixed defect" and so mathematical ordering isn't preserved.   
+
+## Comment on further data pre-processing
+With regards to further data pre-processing, such as centering or standardisation, I've decided not to do any further processing but treat the data as it is. This is because my preference is to do the least amount of data modification as possiable and also because any centering or standardisation is not going to be of much added benefit for either random forest or logistic regression algorithms (which are explored). Although centering values may aid in the interpretation of regression coefficients as then they mean expected change in outcome for unit increase in feature while the rest of feature are average instead of zero (see [__here__](https://stats.stackexchange.com/questions/29781/when-conducting-multiple-regression-when-should-you-center-your-predictor-varia) for discussion of pros and cons of centering and standardisation), I don't feel like this is necessery. Having said that this [__paper__](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-8-25) suggests that random forest derived feature importance may be misleading because of a biased variable selection for continous numerical variables relative to discerete or categorical variables given "bigger space" of decision boundery points for continous numerical variables in decision tree. As we're dealing with mix of feature types this may be an issue but it can be addressed, according to the authors of the paper, by avoiding replacment when sampling during bagging procedure. Lucklily `XGboost` package that I will use for feature importance implements bagging without replacement (see [__reference__](https://xgboost.readthedocs.io/en/latest/tutorials/rf.html) under caveats). Finally numerical variables appear normally distributed with no evidence for skew no warrant a transformation. 
+
+
+
+

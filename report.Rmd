@@ -1,0 +1,172 @@
+---
+title: "Heart Failure analysis and modeling - report"
+author: "Alexander Kheirallah"
+date: "07/10/2020"
+output:
+  pdf_document: 
+    fig_height: 3
+    fig_width: 6
+  html_document:
+    df_print: paged
+    fig_caption: no
+    fig_height: 2
+    fig_width: 5
+---
+_Please see file `code.html` to explore the code executed and outputs generated as part of data exploration, data pre-processing and model training._
+
+## Background
+This report documents my attempt to leverage [__heart disease cleveland dataset__](https://archive.ics.uci.edu/ml/datasets/Heart+Disease) for the provision of predictive model for _angiographic disease status_, as well as identification of correlated features to aid in the understanding of disease pathogenesis and risk factors.
+
+## Methods
+The challenge has been approached from two angles:
+
+- 1. Development of optimal ML model
+- 2. Statistical learning for identification of disease-correlated features
+
+### Data pre-processing
+_Justifications of data pre-processing can be found in `code.html`._
+
+### (1) ML model optimization
+The following 3 steps have been utilized to train and optimize the disease prediction model: 
+
+- (I) Obtain a ranked list of important features (from most important to least important) through a random forest. For this step rely on function `xgboost()` from `XGboost` package.
+- (II) To avoid over fitting, randomly split the data into train and test (I decided to give 40% of data to testing, which is a big proportion, but seems crucial to do as dataset size isn't that big and hence might be accidentally sampling 'outlier' cases).
+- (III) To achieve an optimal model bias/variance trade off, do 13 iterations of logistic regression model training (`glm()` function of `stats` package) where at each loop incrementally add one feature at time, starting with most important feature and going down the list of ordered important features. After each training, test model's efficacy using ROC's _AUC_ generated through predictions and actuals of __test__ partition. 
+
+The number of features beyond which AUC starts to decrease suggests the optimal number of features that should be included in the model.
+
+### (2) Statistical learning
+In order to determine the presence or absence of association between any feature and disease status, the probability of data given the null hypothesis that log-odds are 0 (i.e. coefficients of logistic regression) was calculated by calling `summary()` upon model object that was trained on all 13 features. 
+
+## Results and Conclusions
+_Fig.1_ below shows that the optimal number of features to include is 4. This is because adding more features to logistic regression model reduces AUC in the case of test partition that wasn't seen by the model. The AUC is constantly increasing for train partition, highlighting the random forest over fitting problem which was overcome by using test data. 
+
+_Fig.2_ shows the RUC curves for 4 features models, applying prediction on both train and test partitions. It was surprising to see that AUC was higher for test when using split seed 123 (which was also used throughout the loop-based model evaluation process). I hypothesised that this is due to a "lucky" random split of the data, given the small size of the dataset. Hence splitting was repeated with a different seed and which yielded an AUC lower for test relative to train validating my hypothesis. 
+
+Results of statistical analysis can be found in `code.html`. In summary, at a FDR level of 5%, features `thal`, `ca`, `oldpeak`, `slope`, `sex`, `cp4` (note the `4` here; other categories do not show the association) and `trestbps` associate with disease. In congruence with ML model development `thal`, `ca` and `cp` are among the top 4 most important features. However in disagreement, feature `age` which was among top best performing ones doesn't show evidence of association. Moreover, feature `sex` appears as strong risk factor with men having odds `exp(1.7)=5.4` times higher than women for having the disease; but `sex` showed to be among least important features. 
+
+All-in-all this analysis and training acts a starting point for possible model production. Future work would require the repeat of iterative model evaluation procedure explained above, using at least 3-4 different random train/test split (controlled by seed). We saw that this might be an issue when finding RUC for test higher than for train with seed 123. Finally results of statistical analysis, although make partial sense in light of model development, ought to be taken with caution as feature cross-correlation has not been tested and if present may have spuriously driven some of the reported results.
+ 
+
+```{r setup, include=FALSE}
+library(here)
+source(here("requirements.R"))
+d = read.table(here("data","processed.cleveland.data"),sep = ",",stringsAsFactors = F)
+features = c("age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal")
+names(d) = c(features,"Y")
+d$ca = as.numeric(d$ca)
+d$thal = as.numeric(d$thal)
+d$slope[d$slope==3]=1
+d$slope[d$slope==1]=3
+d$thal[d$thal==3]=1
+d$thal[d$thal==7]=2
+d$thal[d$thal==6]=3
+d$cp = as.factor(d$cp)
+d$restecg = as.factor(d$restecg)
+keep = !(is.na(d$ca) | is.na(d$thal))
+d = d[keep,]
+d = d %>%
+  mutate(Y=Y>0)
+X = d[,features]
+Y = d[,"Y"]
+parameters = list(booster = "gbtree",
+                  objective = "binary:logistic")
+xgb = xgboost(data = data.matrix(X),
+              label = Y,
+              nrounds = 1000,
+              verbose = F,
+              params = parameters)
+
+importance_matrix = xgb.importance(model = xgb,feature_names = features)
+allFeatures_ordered = importance_matrix$Feature
+
+splits = train_test_split(d = d,train_size = 0.6,seed = 123)
+train = splits$train
+test = splits$test
+
+act_train = train$Y
+act_test = test$Y
+
+RUCs_train = c()
+RUCs_test = c()
+
+x = allFeatures_ordered[1]
+form = paste("Y ~",x)
+fit = glm(form, data = train, family = "binomial") 
+
+train_pred = predict(fit,newdata = train,type = "response")
+roc_train = roc(response = act_train,predictor = train_pred,plot=F)
+RUCs_train = c(RUCs_train,roc_train$auc)
+
+test_pred = predict(fit,newdata = test,type = "response")
+roc_test = roc(response = act_test,predictor = test_pred,plot=F)
+RUCs_test = c(RUCs_test,roc_test$auc)
+
+for (i in 2:length(allFeatures_ordered)) {
+  f = allFeatures_ordered[i]
+  # update feature space
+  x = paste(x,"+",f)
+  form = paste("Y ~",x)
+  fit = glm(form, data = train, family = "binomial")
+  
+  train_pred = predict(fit,newdata = train,type = "response")
+  roc_train = roc(response = act_train,predictor = train_pred,plot=F)
+  RUCs_train = c(RUCs_train,roc_train$auc)
+  
+  test_pred = predict(fit,newdata = test,type = "response")
+  roc_test = roc(response = act_test,predictor = test_pred,plot=F)
+  RUCs_test = c(RUCs_test,roc_test$auc)
+}
+```
+
+```{r fig1, echo=FALSE, fig.show="hold", message=FALSE, out.width="50%"}
+RUCs_train_d = as.data.frame(cbind(num=1:length(RUCs_train),auc=RUCs_train))
+RUCs_test_d = as.data.frame(cbind(num=1:length(RUCs_test),auc=RUCs_test))
+
+ggplot(RUCs_train_d, aes(x=num, y=auc)) + geom_point() + geom_line() +ggtitle("Fig.1:Train partition")
+ggplot(RUCs_test_d, aes(x=num, y=auc)) + geom_point() + geom_line() + ggtitle("Fig.1:Test partition")
+```
+
+```{r fig2, fig.show="hold", out.width="50%",warning=FALSE,message = FALSE,echo=FALSE,results='hide'}
+fit = glm(Y ~ thal + cp + ca + age, data = train, family = "binomial")
+train_pred = predict(fit,newdata = train,type = "response")
+test_pred = predict(fit,newdata = test,type = "response")
+
+par(pty="s")
+# train
+roc(response = act_train,predictor = train_pred,
+    plot=T, legacy.axes=T, percent=T, xlab = "False Positive %", ylab = "True Positive %", col="blue",print.auc=T, main="Fig.2:Seed 123/Train-blue,Test-red")
+
+# test
+roc(response = act_test,predictor = test_pred,
+    percent=T, col="red", lwd=1, print.auc=T, add=T, print.auc.y=40, plot = T)
+#legend("bottomright",c("train","test"),fill=c("blue","red"))
+####
+splits = train_test_split(d = d,train_size = 0.6,seed = 567)
+train = splits$train
+test = splits$test
+
+act_train = train$Y
+act_test = test$Y
+
+fit = glm(Y ~ thal + cp + ca + age, data = train, family = "binomial")
+train_pred = predict(fit,newdata = train,type = "response")
+test_pred = predict(fit,newdata = test,type = "response")
+
+par(pty="s")
+# train
+roc(response = act_train,predictor = train_pred,
+    plot=T, legacy.axes=T, percent=T, xlab = "False Positive %", ylab = "True Positive %", col="blue",print.auc=T)
+# test
+roc(response = act_test,predictor = test_pred,
+    percent=T, col="red", lwd=1, print.auc=T, add=T, print.auc.y=40, plot = T)
+#legend("bottomright",c("train","test"),fill=c("blue","red"))
+```
+
+
+
+
+
+
+
+
